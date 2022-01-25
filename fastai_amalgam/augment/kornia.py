@@ -4,11 +4,18 @@ __all__ = [
     "ColorJitter",
     "Rotate",
     "MedianBlur",
-    "RandomMedianBlur",
     "HFlip",
     "VFlip",
     "Grayscale",
     "PerspectiveWarp",
+    "Invert",
+    "Equalize",
+    "Fisheye",
+    "Sharpness",
+    "ChannelShuffle",
+    # Redefined / Modified Kornia transforms
+    "RandomMedianBlur",
+    "RandomInvertLazy",
 ]
 
 
@@ -22,6 +29,7 @@ from typing_extensions import Annotated
 
 import kornia as K
 from kornia.constants import BorderType, Resample
+from torch import Tensor
 
 """
 We only check that the `p` being inputted is between 0-1. Kornia handles checking
@@ -57,7 +65,7 @@ class KorniaBase(RandTransform):
     order = 10
     split_idx = 0
 
-    @beartype
+    # @beartype
     def __init__(self, kornia_tfm: nn.Module, **kwargs):
         super().__init__(p=1.0)  # Delegate handling of transforms to individual tfms
         self.tfm = kornia_tfm
@@ -69,7 +77,7 @@ class KorniaBase(RandTransform):
 
     # fmt: off
     def _encode(self, o:TensorImage):  return TensorImage(self.tfm(o)) if self.do else o
-    def encodes(self, o:torch.Tensor): return self._encode(o)
+    def encodes(self, o:Tensor): return self._encode(o)
     def encodes(self, o:Image.Image):  return self._encode(self.to_tensor(PILImage(o)))
     def encodes(self, o:TensorImage):  return self._encode(o)
     def encodes(self, o:PILImage):     return self._encode(self.to_tensor(o))
@@ -86,7 +94,7 @@ class MotionBlur(KorniaBase):
     order = 110
 
     # FIXME: Also accept Tuple[int, int] after this issue is closed: https://github.com/kornia/kornia/issues/1540
-    @beartype
+    # @beartype
     def __init__(
         self,
         p: FloatProbability = 0.2,
@@ -104,7 +112,7 @@ class ColorJitter(KorniaBase):
     "kornia.augmentation.ColorJitter"
     order = 20
 
-    @beartype
+    # @beartype
     def __init__(
         self,
         p: FloatProbability = 0.2,
@@ -127,7 +135,7 @@ class Rotate(KorniaBase):
     "kornia.augmentation.RandomRotation"
     order = 13
 
-    @beartype
+    # @beartype
     def __init__(self, p: FloatProbability = 0.2, rotate_degrees=10):
         tfm = K.augmentation.RandomRotation(rotate_degrees, p=p)
         super().__init__(tfm)
@@ -138,7 +146,7 @@ class RandomMedianBlur(K.filters.MedianBlur):
         super().__init__(kernel_size)
         self.p = p
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
+    def forward(self, input: Tensor) -> Tensor:
         if random.random() < self.p:
             return super().forward(input)
         else:
@@ -149,7 +157,7 @@ class MedianBlur(KorniaBase):
     "kornia.filters.MedianBlur"
     order = 14
 
-    @beartype
+    # @beartype
     def __init__(self, p: FloatProbability = 0.2, kernel_size=(5, 5)):
         tfm = RandomMedianBlur(kernel_size, p)
         super().__init__(tfm)
@@ -159,7 +167,7 @@ class HFlip(KorniaBase):
     "kornia.augmentation.RandomHorizontalFlip"
     order = 15
 
-    @beartype
+    # @beartype
     def __init__(self, p: FloatProbability = 0.5):
         tfm = K.augmentation.RandomHorizontalFlip(p=p)
         super().__init__(tfm)
@@ -169,7 +177,7 @@ class VFlip(KorniaBase):
     "kornia.augmentation.RandomVerticalFlip"
     order = 16
 
-    @beartype
+    # @beartype
     def __init__(self, p: FloatProbability = 0.5):
         tfm = K.augmentation.RandomVerticalFlip(p=p)
         super().__init__(tfm)
@@ -179,7 +187,7 @@ class Grayscale(KorniaBase):
     "kornia.augmentation.RandomGrayscale"
     order = 17
 
-    @beartype
+    # @beartype
     def __init__(self, p: FloatProbability = 0.2):
         tfm = K.augmentation.RandomGrayscale(p=p)
         super().__init__(tfm)
@@ -189,7 +197,7 @@ class PerspectiveWarp(KorniaBase):
     "kornia.augmentation.RandomPerspective"
     order = 18
 
-    @beartype
+    # @beartype
     def __init__(
         self,
         p: FloatProbability = 0.2,
@@ -199,4 +207,89 @@ class PerspectiveWarp(KorniaBase):
         tfm = K.augmentation.RandomPerspective(
             p=p, distortion_scale=distortion_scale, resample=resample
         )
+        super().__init__(tfm)
+
+
+# Redefine
+class RandomInvertLazy(K.augmentation.RandomInvert):
+    """
+    Like kornia's RandomInvert but dynamically determines the `max_val` based
+    on the input tensor. This is useful because some models, like YOLOX, may
+    not normalise inputs and instead rely on BatchNorm to adapt to the wider
+    input range instead
+    """
+
+    def __init__(
+        self,
+        return_transform: bool = False,
+        same_on_batch: bool = False,
+        p: float = 0.5,
+        keepdim: bool = False,
+    ) -> None:
+        max_val = None
+        super().__init__(max_val, return_transform, same_on_batch, p, keepdim)
+        del self.flags
+
+    def apply_transform(
+        self,
+        input: Tensor,
+        params: Dict[str, Tensor],
+        transform: Optional[Tensor] = None,
+    ) -> Tensor:
+        self.flags = dict(max_val=input.max())
+        return super().apply_transform(input, params, transform)
+
+
+class Invert(KorniaBase):
+    "Lazy version of K.augmentation.RandomInvert"
+    order = 19
+
+    # @beartype
+    def __init__(self, p: FloatProbability = 0.25, max_val: float = 1.0):
+        tfm = RandomInvertLazy(p=p)
+        super().__init__(tfm)
+
+
+class Equalize(KorniaBase):
+    "K.augmentation.RandomEqualize"
+    order = 20
+
+    # @beartype
+    def __init__(self, p: FloatProbability = 0.25):
+        tfm = K.augmentation.RandomEqualize(p=p)
+        super().__init__(tfm)
+
+
+class Fisheye(KorniaBase):
+    "K.augmentation.RandomFisheye"
+    order = 21
+
+    # @beartype
+    def __init__(
+        self,
+        p: FloatProbability = 0.25,
+        center_x: Tensor = torch.tensor([-0.3, 0.3]),
+        center_y: Tensor = torch.tensor([-0.3, 0.3]),
+        gamma: Tensor = torch.tensor([0.9, 1.0]),
+    ):
+        tfm = K.augmentation.RandomFisheye(center_x, center_y, gamma, p=p)
+        super().__init__(tfm)
+
+
+class Sharpness(KorniaBase):
+    "K.augmentation.RandomSharpness"
+    order = 22
+
+    def __init__(self, p: FloatProbability, sharpness=(3.0, 33.0)):
+        tfm = K.augmentation.RandomSharpness(sharpness, p=p)
+        super().__init__(tfm)
+
+
+class ChannelShuffle(KorniaBase):
+    "K.augmentation.RandomChannelShuffle"
+    order = 23
+
+    # @beartype
+    def __init__(self, p: FloatProbability):
+        tfm = K.augmentation.RandomChannelShuffle(p=p)
         super().__init__(tfm)
