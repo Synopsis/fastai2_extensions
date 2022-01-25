@@ -189,7 +189,13 @@ class PerspectiveWarp(KorniaBase):
     "kornia.augmentation.RandomPerspective"
     order = 18
 
-    def __init__(self, p=0.2, distortion_scale=0.5, resample=Resample.BILINEAR):
+    @beartype
+    def __init__(
+        self,
+        p: FloatProbability = 0.2,
+        distortion_scale=0.5,
+        resample=Resample.BILINEAR,
+    ):
         tfm = K.augmentation.RandomPerspective(
             p=p, distortion_scale=distortion_scale, resample=resample
         )
